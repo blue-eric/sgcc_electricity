@@ -48,6 +48,8 @@ def main():
         LOG_LEVEL = os.getenv("LOG_LEVEL","INFO")
         VERSION = os.getenv("VERSION", "unknown")
         RETRY_TIMES_LIMIT = int(os.getenv("RETRY_TIMES_LIMIT", 5))
+        JOB_TIMES_PER_DAY = 1 if os.getenv("JOB_TIMES_PER_DAY", "2").strip() == "1" else 2
+        HA_REPUBLISH_INTERVAL_MINUTES = max(1, int(os.getenv("HA_REPUBLISH_INTERVAL_MINUTES", 5)))
         
         logger_init(LOG_LEVEL)
         start_web_dashboard_if_enabled()
@@ -98,12 +100,18 @@ def main():
     parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
     logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
 
-    logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
+    if JOB_TIMES_PER_DAY == 2:
+        next_run_time = parsed_time + timedelta(hours=12)
+        schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
+        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+    else:
+        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     
-    # 每240分钟重发一次数据，防止HA重启后数据丢失
+    # 定时重发缓存数据，防止HA重启后数据丢失（不会登录国网）
     if updator:
-        schedule.every(240).minutes.do(updator.republish)
+        schedule.every(HA_REPUBLISH_INTERVAL_MINUTES).minutes.do(updator.republish)
+        logging.info(f"HA 数据重发间隔: {HA_REPUBLISH_INTERVAL_MINUTES} 分钟")
     
     # 启动时抓取策略：
     # RUN_ON_STARTUP=true  → 立即登录抓取（Docker 调试/首次部署推荐）

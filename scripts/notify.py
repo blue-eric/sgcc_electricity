@@ -114,8 +114,8 @@ def _post_wework(webhook: str, payload: dict) -> bool:
 
 
 def _msg_format() -> str:
-    """读取消息格式配置，默认 text。支持 text / markdown / markdown_v2。"""
-    return os.getenv("WEWORK_MSG_FORMAT", "text").strip().lower()
+    """读取消息格式配置，默认 markdown（与旧版行为一致）。支持 text / markdown / markdown_v2。"""
+    return os.getenv("WEWORK_MSG_FORMAT", "markdown").strip().lower()
 
 
 def _build_payload(fmt: str, text_content: str, md_content: str) -> dict:
@@ -179,9 +179,9 @@ class WeworkNotify(typ.NamedTuple):
     """企业微信群机器人 webhook 余额提醒。
 
     WEWORK_MSG_FORMAT 控制消息格式：
-      - text        纯文字，微信/企业微信均可直接查看（默认）
+      - text        纯文字，微信/企业微信均可直接查看
       - markdown_v2 标准 Markdown，微信可直接查看
-      - markdown    旧版企业微信 Markdown，微信不可见
+      - markdown    旧版企业微信 Markdown，微信不可见（默认）
     """
 
     def __call__(self, user_id, balance, user_name: str = ""):
@@ -238,9 +238,9 @@ class WeworkSummaryNotify(typ.NamedTuple):
     """企业微信推送户号数据汇总（拉取成功后）。
 
     WEWORK_MSG_FORMAT 控制消息格式：
-      - text        纯文字+emoji，微信/企业微信均可直接查看（默认）
+      - text        纯文字+emoji，微信/企业微信均可直接查看
       - markdown_v2 标准 Markdown，微信可直接查看
-      - markdown    旧版企业微信 Markdown，微信不可见
+      - markdown    旧版企业微信 Markdown，微信不可见（默认）
     """
 
     def __call__(self, records: list) -> bool:
