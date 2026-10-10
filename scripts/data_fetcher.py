@@ -53,8 +53,15 @@ class DataFetcher:
         self.IGNORE_USER_ID = [uid.strip() for uid in os.getenv("IGNORE_USER_ID", "xxxxx,xxxxx").split(",") if uid.strip()]
         self.QR_CODE_LOGIN_WAIT_COUNT = int(os.getenv("QR_CODE_LOGIN_WAIT_COUNT", 7))
         self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT = int(os.getenv("QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT", 10))
-        # 用户名映射: 由 _get_user_ids 从网站下拉框自动填充
+        # 用户名映射: 优先读取 USER_NAMES 手动配置，再由 _get_user_ids 从网站自动填充
         self._user_name_map = {}
+        _user_names_env = os.getenv("USER_NAMES", "")
+        if _user_names_env:
+            for pair in _user_names_env.split(","):
+                if ":" in pair:
+                    uid, uname = pair.split(":", 1)
+                    self._user_name_map[uid.strip()] = uname.strip()
+            logging.info(f"已从 USER_NAMES 加载 {len(self._user_name_map)} 个用户名映射: {self._user_name_map}")
         # 本地运行用更短的步骤等待
         self._step_wait = 2 if 'PYTHON_IN_DOCKER' not in os.environ else self.RETRY_WAIT_TIME_OFFSET_UNIT
         logging.info(f"数据抓取器初始化完成: 用户={username}, 步骤等待={self._step_wait}s, "
@@ -1563,9 +1570,11 @@ class DataFetcher:
                 time.sleep(self._step_wait)
             self._click_button(driver, By.XPATH, "//div[@class='el-tabs__nav is-top']/div[@id='tab-first']")
             time.sleep(self._step_wait)
-            # wait for data displayed
-            target = driver.find_element(By.CLASS_NAME, "total")
-            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
+            # wait for data displayed — 用 visibility_of_element_located 合并查找与等待，
+            # 避免 find_element 在元素未挂载时立即抛异常（住宅账户切换后页面重渲染较慢）
+            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
+                EC.visibility_of_element_located((By.CLASS_NAME, "total"))
+            )
         except Exception as e:
             logging.error(f"获取年度数据失败: {e}")
             return None, None
@@ -1621,9 +1630,10 @@ class DataFetcher:
                 span_element = driver.find_element(By.XPATH, f"//span[text() = '{datetime.now().year - 1}']")
                 span_element.click()
                 time.sleep(self._step_wait)
-            # wait for month displayed
-            target = driver.find_element(By.CLASS_NAME, "total")
-            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(EC.visibility_of(target))
+            # wait for month displayed — 同上，合并查找与等待避免住宅账户页面未就绪时抛异常
+            WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
+                EC.visibility_of_element_located((By.CLASS_NAME, "total"))
+            )
             month_element = driver.find_element(By.XPATH, "//*[@id='pane-first']/div[1]/div[2]/div[2]/div/div[3]/table/tbody").text
             month_element = month_element.split("\n")
             month_element = [x for x in month_element if x != "MAX"]

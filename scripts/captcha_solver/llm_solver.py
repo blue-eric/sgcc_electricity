@@ -186,7 +186,13 @@ class ClickCaptchaSolver:
         try:
             response = self.client.chat.completions.create(**kwargs)
             output = response.choices[0].message.content or ""
-            logger.info("大模型 API 响应完成 (%.1fs)", time.monotonic() - t0)
+            # 打印 Request ID，便于向大模型服务商排查慢响应问题
+            request_id = getattr(response, "id", None) or \
+                         getattr(response, "_request_id", None) or "unknown"
+            elapsed = time.monotonic() - t0
+            logger.info("大模型 API 响应完成 (%.1fs) | Request-ID: %s", elapsed, request_id)
+            if elapsed > 30:
+                logger.warning("大模型响应过慢 (%.1fs)，Request-ID: %s，可凭此向服务商排查", elapsed, request_id)
             return output
         finally:
             stop.set()

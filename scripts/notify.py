@@ -8,6 +8,10 @@ import typing as typ
 import requests
 
 
+# ============================================================
+# 工具函数
+# ============================================================
+
 def _balance_threshold() -> float:
     return float(os.getenv("BALANCE", 10.0))
 
@@ -109,6 +113,29 @@ def _post_wework(webhook: str, payload: dict) -> bool:
         return False
 
 
+def _msg_format() -> str:
+    """读取消息格式配置，默认 text。支持 text / markdown / markdown_v2。"""
+    return os.getenv("WEWORK_MSG_FORMAT", "text").strip().lower()
+
+
+def _build_payload(fmt: str, text_content: str, md_content: str) -> dict:
+    """
+    根据格式构建企业微信消息 payload。
+    - fmt=text        → 纯文字，微信/企业微信均可直接查看
+    - fmt=markdown_v2 → 标准 Markdown，微信可直接查看（需客户端 4.1.36+）
+    - fmt=markdown    → 旧版企业微信 Markdown（<font color> 等），微信不可见
+    """
+    if fmt == "text":
+        return {"msgtype": "text", "text": {"content": text_content}}
+    if fmt == "markdown_v2":
+        return {"msgtype": "markdown_v2", "markdown_v2": {"content": md_content}}
+    return {"msgtype": "markdown", "markdown": {"content": md_content}}
+
+
+# ============================================================
+# 推送类
+# ============================================================
+
 class PushplusNotify(typ.NamedTuple):
 
     def __call__(self, user_id, balance, user_name: str = ""):
@@ -149,7 +176,13 @@ class UrlPushNotify(typ.NamedTuple):
 
 
 class WeworkNotify(typ.NamedTuple):
-    """企业微信群机器人 webhook 余额提醒。"""
+    """企业微信群机器人 webhook 余额提醒。
+
+    WEWORK_MSG_FORMAT 控制消息格式：
+      - text        纯文字，微信/企业微信均可直接查看（默认）
+      - markdown_v2 标准 Markdown，微信可直接查看
+      - markdown    旧版企业微信 Markdown，微信不可见
+    """
 
     def __call__(self, user_id, balance, user_name: str = ""):
         if not _should_notify(balance):
@@ -158,17 +191,43 @@ class WeworkNotify(typ.NamedTuple):
         if not webhook:
             logging.warning("WEWORK_WEBHOOK_URL 未配置")
             return False
+
         label = _format_user_label(user_id, user_name)
         threshold = _balance_threshold()
-        content = (
-            "**电费余额不足提醒**\n"
-            f"> 户名：<font color=\"comment\">{(user_name or user_id)}</font>\n"
-            f"> 户号：<font color=\"comment\">{user_id}</font>\n"
-            f"> 当前余额：<font color=\"warning\">{balance} 元</font>\n"
-            f"> 提醒阈值：{threshold} 元\n"
+        fmt = _msg_format()
+
+        # text 模板：纯文字+emoji
+        text_content = (
+            "\U0001F4CC 电费余额不足提醒\n"
+            f"\U0001F3E0 户名：{(user_name or user_id)}\n"
+            f"\U0001F522 户号：{user_id}\n"
+            f"\U0001F4B0 当前余额：{balance} 元\n"
+            f"\U000026A0 提醒阈值：{threshold} 元\n"
             "请及时登录国网 APP 或网站充值。"
         )
-        payload = {"msgtype": "markdown", "markdown": {"content": content}}
+
+        # markdown / markdown_v2 模板
+        # markdown_v2 不支持 <font color>，用 **粗体** 和 emoji 替代
+        if fmt == "markdown_v2":
+            md_content = (
+                "## \U0001F4CC 电费余额不足提醒\n"
+                f"- **户名**：{(user_name or user_id)}\n"
+                f"- **户号**：{user_id}\n"
+                f"- **当前余额**：{balance} 元\n"
+                f"- **提醒阈值**：{threshold} 元\n\n"
+                "请及时登录国网 APP 或网站充值。"
+            )
+        else:
+            md_content = (
+                "**电费余额不足提醒**\n"
+                f"> 户名：<font color=\"comment\">{(user_name or user_id)}</font>\n"
+                f"> 户号：<font color=\"comment\">{user_id}</font>\n"
+                f"> 当前余额：<font color=\"warning\">{balance} 元</font>\n"
+                f"> 提醒阈值：{threshold} 元\n"
+                "请及时登录国网 APP 或网站充值。"
+            )
+
+        payload = _build_payload(fmt, text_content, md_content)
         ok = _post_wework(webhook, payload)
         if ok:
             logging.info("已发送企业微信余额提醒: %s 余额=%s", label, balance)
@@ -176,7 +235,13 @@ class WeworkNotify(typ.NamedTuple):
 
 
 class WeworkSummaryNotify(typ.NamedTuple):
-    """企业微信推送户号数据汇总（拉取成功后）。"""
+    """企业微信推送户号数据汇总（拉取成功后）。
+
+    WEWORK_MSG_FORMAT 控制消息格式：
+      - text        纯文字+emoji，微信/企业微信均可直接查看（默认）
+      - markdown_v2 标准 Markdown，微信可直接查看
+      - markdown    旧版企业微信 Markdown，微信不可见
+    """
 
     def __call__(self, records: list) -> bool:
         webhook = os.getenv("WEWORK_WEBHOOK_URL", "").strip()
@@ -184,55 +249,159 @@ class WeworkSummaryNotify(typ.NamedTuple):
             return False
 
         now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lines = [
-            "## 国家电网数据同步完成",
-            f"> 同步时间：<font color=\"comment\">{now}</font>",
-            f"> 成功户号：<font color=\"info\">{len(records)}</font> 个",
-            "",
-        ]
-        for item in records:
-            user_id = item.get("user_id", "")
-            user_name = item.get("user_name") or user_id
-            balance = item.get("balance")
-            balance_text = f"{balance} 元" if balance is not None else "—"
-            balance_color = "warning" if balance is not None and balance < _balance_threshold() else "info"
-            lines.extend([
-                f"### {user_name}",
-                f"> 户号：<font color=\"comment\">{user_id}</font>",
-                f"> 余额：<font color=\"{balance_color}\">{balance_text}</font>",
-            ])
-            if item.get("last_daily_date") and item.get("last_daily_usage") is not None:
-                lines.append(
-                    f"> 最近用电：{item['last_daily_usage']} kWh ({item['last_daily_date']})"
-                )
-            if item.get("month_usage") is not None or item.get("month_charge") is not None:
-                period = item.get("last_month_period") or "账单月"
-                lines.append(
-                    f"> 上月（{period}）：{item.get('month_usage', '—')} kWh / {item.get('month_charge', '—')} 元"
-                )
-            tou_data = item.get("tou_data") or {}
-            current = _sum_current_month_tou(tou_data)
-            if current.get("usage") is not None:
-                month_label = _current_month_prefix()
-                charge = _resolve_current_month_charge(tou_data)
-                charge_part = f" / {charge} 元" if charge is not None else ""
-                lines.append(
-                    f"> 当月累计（{month_label}）：{current['usage']} kWh{charge_part}"
-                )
-                tou_text = _format_tou_detail(current)
-                if tou_text:
-                    lines.append(f"> 当月分时：{tou_text} kWh")
-            if item.get("yearly_usage") is not None or item.get("yearly_charge") is not None:
-                lines.append(
-                    f"> 年度：{item.get('yearly_usage', '—')} kWh / {item.get('yearly_charge', '—')} 元"
-                )
-            enhanced = item.get("enhanced_balance") or {}
-            if enhanced.get("amount_due") is not None:
-                lines.append(f"> 应交金额：{enhanced['amount_due']} 元")
-            lines.append("")
+        fmt = _msg_format()
 
-        content = "\n".join(lines).strip()
-        payload = {"msgtype": "markdown", "markdown": {"content": content}}
+        # ── text 模板 ───────────────────────────────────────────────
+        if fmt == "text":
+            lines = [
+                "\U0001F4CC 国家电网数据同步完成",
+                f"\U0001F552 同步时间：{now}",
+                f"\U0001F465 成功户号：{len(records)} 个",
+                "",
+            ]
+            for item in records:
+                uid       = item.get("user_id", "")
+                uname     = item.get("user_name") or uid
+                balance   = item.get("balance")
+                bal_text  = f"\u00a5{balance}" if balance is not None else "\u2014"
+                lines.append(f"\U000026A1 {uname}  \u00b7 {uid}")
+                lines.append(f"  \U0001F4B0 余额：{bal_text}")
+                if item.get("last_daily_date") and item.get("last_daily_usage") is not None:
+                    lines.append(
+                        f"  \U0001F4C5 最近用电：{item['last_daily_usage']} kWh ({item['last_daily_date']})"
+                    )
+                if item.get("month_usage") is not None or item.get("month_charge") is not None:
+                    period = item.get("last_month_period") or "上月"
+                    lines.append(
+                        f"  \U0001F4CA 上月（{period}）：{item.get('month_usage', chr(8212))} kWh"
+                        f" / {item.get('month_charge', chr(8212))} 元"
+                    )
+                tou_data = item.get("tou_data") or {}
+                current = _sum_current_month_tou(tou_data)
+                if current.get("usage") is not None:
+                    month_label = _current_month_prefix()
+                    charge = _resolve_current_month_charge(tou_data)
+                    charge_part = f" / {charge} 元" if charge is not None else ""
+                    lines.append(
+                        f"  \U0001F4C8 当月累计（{month_label}）：{current['usage']} kWh{charge_part}"
+                    )
+                    tou_text = _format_tou_detail(current)
+                    if tou_text:
+                        lines.append(f"  \U0001F553 分时：{tou_text} kWh")
+                if item.get("yearly_usage") is not None or item.get("yearly_charge") is not None:
+                    lines.append(
+                        f"  \U0001F4C6 年度：{item.get('yearly_usage', chr(8212))} kWh"
+                        f" / {item.get('yearly_charge', chr(8212))} 元"
+                    )
+                enhanced = item.get("enhanced_balance") or {}
+                if enhanced.get("amount_due") is not None:
+                    lines.append(f"  \U0001F4CB 应交金额：{enhanced['amount_due']} 元")
+                lines.append("")
+            text_content = "\n".join(lines).strip()
+            payload = {"msgtype": "text", "text": {"content": text_content}}
+
+        # ── markdown_v2 模板 ────────────────────────────────────────
+        elif fmt == "markdown_v2":
+            lines = [
+                "## \U0001F4CC 国家电网数据同步完成",
+                f"- **同步时间**：{now}",
+                f"- **成功户号**：{len(records)} 个",
+                "",
+            ]
+            for item in records:
+                uid       = item.get("user_id", "")
+                uname     = item.get("user_name") or uid
+                balance   = item.get("balance")
+                bal_text  = f"\u00a5{balance}" if balance is not None else "\u2014"
+                bal_warn  = balance is not None and balance < _balance_threshold()
+                lines.append(f"### \U000026A1 {uname}")
+                lines.append(f"- **户号**：{uid}")
+                lines.append(f"- **余额**：{'**' + bal_text + '** \u26a0\ufe0f 余额不足' if bal_warn else bal_text}")
+                if item.get("last_daily_date") and item.get("last_daily_usage") is not None:
+                    lines.append(
+                        f"- **最近用电**：{item['last_daily_usage']} kWh （{item['last_daily_date']}）"
+                    )
+                if item.get("month_usage") is not None or item.get("month_charge") is not None:
+                    period = item.get("last_month_period") or "上月"
+                    lines.append(
+                        f"- **上月**（{period}）：{item.get('month_usage', chr(8212))} kWh"
+                        f" / {item.get('month_charge', chr(8212))} 元"
+                    )
+                tou_data = item.get("tou_data") or {}
+                current = _sum_current_month_tou(tou_data)
+                if current.get("usage") is not None:
+                    month_label = _current_month_prefix()
+                    charge = _resolve_current_month_charge(tou_data)
+                    charge_part = f" / {charge} 元" if charge is not None else ""
+                    lines.append(
+                        f"- **当月累计**（{month_label}）：{current['usage']} kWh{charge_part}"
+                    )
+                    tou_text = _format_tou_detail(current)
+                    if tou_text:
+                        lines.append(f"- **分时**：{tou_text} kWh")
+                if item.get("yearly_usage") is not None or item.get("yearly_charge") is not None:
+                    lines.append(
+                        f"- **年度**：{item.get('yearly_usage', chr(8212))} kWh"
+                        f" / {item.get('yearly_charge', chr(8212))} 元"
+                    )
+                enhanced = item.get("enhanced_balance") or {}
+                if enhanced.get("amount_due") is not None:
+                    lines.append(f"- **应交金额**：{enhanced['amount_due']} 元")
+                lines.append("")
+            payload = {"msgtype": "markdown_v2", "markdown_v2": {"content": "\n".join(lines).strip()}}
+
+        # ── markdown 模板（旧版，仅企业微信内可渲染）────────────────
+        else:
+            lines = [
+                "## 国家电网数据同步完成",
+                f"> 同步时间：<font color=\"comment\">{now}</font>",
+                f"> 成功户号：<font color=\"info\">{len(records)}</font> 个",
+                "",
+            ]
+            for item in records:
+                uid       = item.get("user_id", "")
+                uname     = item.get("user_name") or uid
+                balance   = item.get("balance")
+                bal_text  = f"{balance} 元" if balance is not None else "—"
+                bal_color = "warning" if balance is not None and balance < _balance_threshold() else "info"
+                lines.extend([
+                    f"### {uname}",
+                    f"> 户号：<font color=\"comment\">{uid}</font>",
+                    f"> 余额：<font color=\"{bal_color}\">{bal_text}</font>",
+                ])
+                if item.get("last_daily_date") and item.get("last_daily_usage") is not None:
+                    lines.append(
+                        f"> 最近用电：{item['last_daily_usage']} kWh ({item['last_daily_date']})"
+                    )
+                if item.get("month_usage") is not None or item.get("month_charge") is not None:
+                    period = item.get("last_month_period") or "账单月"
+                    lines.append(
+                        f"> 上月（{period}）：{item.get('month_usage', '—')} kWh"
+                        f" / {item.get('month_charge', '—')} 元"
+                    )
+                tou_data = item.get("tou_data") or {}
+                current = _sum_current_month_tou(tou_data)
+                if current.get("usage") is not None:
+                    month_label = _current_month_prefix()
+                    charge = _resolve_current_month_charge(tou_data)
+                    charge_part = f" / {charge} 元" if charge is not None else ""
+                    lines.append(
+                        f"> 当月累计（{month_label}）：{current['usage']} kWh{charge_part}"
+                    )
+                    tou_text = _format_tou_detail(current)
+                    if tou_text:
+                        lines.append(f"> 当月分时：{tou_text} kWh")
+                if item.get("yearly_usage") is not None or item.get("yearly_charge") is not None:
+                    lines.append(
+                        f"> 年度：{item.get('yearly_usage', '—')} kWh"
+                        f" / {item.get('yearly_charge', '—')} 元"
+                    )
+                enhanced = item.get("enhanced_balance") or {}
+                if enhanced.get("amount_due") is not None:
+                    lines.append(f"> 应交金额：{enhanced['amount_due']} 元")
+                lines.append("")
+            payload = {"msgtype": "markdown", "markdown": {"content": "\n".join(lines).strip()}}
+
         ok = _post_wework(webhook, payload)
         if ok:
             logging.info("已发送企业微信数据汇总，共 %s 个户号", len(records))
@@ -309,13 +478,29 @@ def _ensure_env_loaded() -> None:
 
 
 def _push_wework_login_text(webhook: str, reason: str) -> bool:
+    """推送登录提示文字（扫码前的说明）。"""
     scene = reason.strip() or "扫码登录"
-    content = (
-        "**国家电网登录提醒**\n"
-        f"> 场景：<font color=\"comment\">{scene}</font>\n"
-        "> 请使用 **国网 App** 扫描下方二维码完成登录"
+    fmt = _msg_format()
+
+    text_content = (
+        "\U0001F4CC 国家电网登录提醒\n"
+        f"\U0001F4CB 场景：{scene}\n"
+        "请使用国网 App 扫描下方二维码完成登录。"
     )
-    return _post_wework(webhook, {"msgtype": "markdown", "markdown": {"content": content}})
+    if fmt == "markdown_v2":
+        md_content = (
+            "## \U0001F4CC 国家电网登录提醒\n"
+            f"- **场景**：{scene}\n"
+            "- 请使用 **国网 App** 扫描下方二维码完成登录。"
+        )
+    else:
+        md_content = (
+            "**国家电网登录提醒**\n"
+            f"> 场景：<font color=\"comment\">{scene}</font>\n"
+            "> 请使用 **国网 App** 扫描下方二维码完成登录"
+        )
+
+    return _post_wework(webhook, _build_payload(fmt, text_content, md_content))
 
 
 def push_login_qrcode(qrcode: bytes, reason: str = "") -> bool:
