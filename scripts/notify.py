@@ -316,7 +316,8 @@ class WeworkSummaryNotify(typ.NamedTuple):
                 bal_warn  = balance is not None and balance < _balance_threshold()
                 lines.append(f"### \U000026A1 {uname}")
                 lines.append(f"- **户号**：{uid}")
-                lines.append(f"- **余额**：{'**' + bal_text + '** \u26a0\ufe0f 余额不足' if bal_warn else bal_text}")
+                bal_line = f"**{bal_text}** \u26a0\ufe0f 余额不足" if bal_warn else bal_text
+                lines.append(f"- **余额**：{bal_line}")
                 if item.get("last_daily_date") and item.get("last_daily_usage") is not None:
                     lines.append(
                         f"- **最近用电**：{item['last_daily_usage']} kWh （{item['last_daily_date']}）"
@@ -530,3 +531,40 @@ def push_login_qrcode(qrcode: bytes, reason: str = "") -> bool:
         "未配置二维码推送渠道 (PUSH_TYPE=wework 需 WEWORK_WEBHOOK_URL，或配置 PUSH_QRCODE_URL)"
     )
     return False
+
+def push_fetch_failed(retry_times: int) -> bool:
+    """定时同步重试耗尽后推送失败通知（仅 PUSH_TYPE=wework）。"""
+    if os.getenv("PUSH_TYPE", "none").strip().lower() != "wework":
+        return False
+    webhook = os.getenv("WEWORK_WEBHOOK_URL", "").strip()
+    if not webhook:
+        return False
+
+    now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fmt = _msg_format()
+
+    text_content = (
+        "\U000026A0 国家电网数据同步失败\n"
+        f"\U0001F552 时间：{now}\n"
+        f"\U0001F504 已重试 {retry_times} 次，均失败\n"
+        "请检查登录状态或验证码配置。"
+    )
+    if fmt == "markdown_v2":
+        md_content = (
+            "## \U000026A0 国家电网数据同步失败\n"
+            f"- **时间**：{now}\n"
+            f"- **已重试**：{retry_times} 次，均失败\n\n"
+            "请检查登录状态或验证码配置。"
+        )
+    else:
+        md_content = (
+            "**国家电网数据同步失败**\n"
+            f"> 时间：<font color=\"comment\">{now}</font>\n"
+            f"> 已重试 <font color=\"warning\">{retry_times}</font> 次，均失败\n"
+            "请检查登录状态或验证码配置。"
+        )
+
+    ok = _post_wework(webhook, _build_payload(fmt, text_content, md_content))
+    if ok:
+        logging.info("已发送数据同步失败通知")
+    return ok

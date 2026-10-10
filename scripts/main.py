@@ -101,9 +101,8 @@ def main():
     # 添加随机延迟
     next_run_time = parsed_time + timedelta(hours=12)
 
-    logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+    logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
-    # schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)  # 已禁用：只每天跑一次
     
     # 每240分钟重发一次数据，防止HA重启后数据丢失
     if updator:
@@ -146,22 +145,10 @@ def run_task(data_fetcher: DataFetcher):
         mark_fetch_finished(False, "定时同步重试次数已用尽")
         # 重试耗尽后发送失败通知
         try:
-            import os, requests
-            webhook = os.getenv("WEWORK_WEBHOOK_URL", "").strip()
-            push_type = os.getenv("PUSH_TYPE", "none").strip().lower()
-            if webhook and push_type == "wework":
-                import datetime
-                msg_format = os.getenv("WEWORK_MSG_FORMAT", "text").strip().lower()
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                text = f"\U000026A0 国家电网数据同步失败\n\U0001F552 时间：{now}\n\U0001F504 已重试 {RETRY_TIMES_LIMIT} 次，均失败\n请检查登录状态或验证码配置。"
-                if msg_format == "markdown_v2":
-                    payload = {"msgtype": "markdown_v2", "markdown_v2": {"content": text}}
-                elif msg_format == "markdown":
-                    payload = {"msgtype": "markdown", "markdown": {"content": f"**\u26a0 国家电网数据同步失败**\n> 时间：{now}\n> 已重试 {RETRY_TIMES_LIMIT} 次，均失败\n请检查登录状态或验证码配置。"}}
-                else:
-                    payload = {"msgtype": "text", "text": {"content": text}}
-                requests.post(webhook, json=payload, timeout=10)
-                logging.info("已发送数据同步失败通知")
+            from notify import push_fetch_failed
+            push_fetch_failed(RETRY_TIMES_LIMIT)
+        except Exception as notify_exc:
+            logging.warning("发送失败通知时出错: %s", notify_exc)
         except Exception as notify_exc:
             logging.warning("发送失败通知时出错: %s", notify_exc)
 
