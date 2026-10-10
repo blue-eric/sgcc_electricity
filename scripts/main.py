@@ -98,9 +98,6 @@ def main():
     parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
     logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
 
-    # 添加随机延迟
-    next_run_time = parsed_time + timedelta(hours=12)
-
     logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
     
@@ -149,8 +146,7 @@ def run_task(data_fetcher: DataFetcher):
             push_fetch_failed(RETRY_TIMES_LIMIT)
         except Exception as notify_exc:
             logging.warning("发送失败通知时出错: %s", notify_exc)
-        except Exception as notify_exc:
-            logging.warning("发送失败通知时出错: %s", notify_exc)
+
 
 def logger_init(level: str):
     logger = logging.getLogger()

@@ -532,6 +532,7 @@ def push_login_qrcode(qrcode: bytes, reason: str = "") -> bool:
     )
     return False
 
+
 def push_fetch_failed(retry_times: int) -> bool:
     """定时同步重试耗尽后推送失败通知（仅 PUSH_TYPE=wework）。"""
     if os.getenv("PUSH_TYPE", "none").strip().lower() != "wework":
