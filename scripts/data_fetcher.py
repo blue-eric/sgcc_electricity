@@ -55,6 +55,8 @@ class DataFetcher:
         self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT = int(os.getenv("QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT", 10))
         # 用户名映射: 优先读取 USER_NAMES 手动配置，再由 _get_user_ids 从网站自动填充
         self._user_name_map = {}
+        # 户号 -> 网站下拉框选项原文，仅用于切换户号时匹配选项（不受 USER_NAMES 影响）
+        self._option_label_map = {}
         _user_names_env = os.getenv("USER_NAMES", "")
         if _user_names_env:
             for pair in _user_names_env.split(","):
@@ -916,6 +918,8 @@ class DataFetcher:
             logging.info(f"用户 [{user_id}] 已是当前选中用户, 无需切换")
             return True
 
+        # 优先用网站下拉框的选项原文匹配；USER_NAMES 自定义的名字不会出现在下拉框里
+        option_label = self._option_label_map.get(user_id, "")
         user_name = self._user_name_map.get(user_id, "")
 
         try:
@@ -942,11 +946,15 @@ class DataFetcher:
                     if self._get_current_userid(driver) == user_id:
                         logging.info(f"已切换到用户 [{user_id}]")
                         return True
-                if user_name and user_name in text:
+                if option_label:
+                    matched = text.strip() == option_label.strip()
+                else:
+                    matched = bool(user_name) and user_name in text
+                if matched:
                     driver.execute_script("arguments[0].click();", opt)
                     time.sleep(self._step_wait)
                     if self._get_current_userid(driver) == user_id:
-                        logging.info(f"已切换到用户 [{user_id}] ({user_name})")
+                        logging.info(f"已切换到用户 [{user_id}] ({text})")
                         return True
 
             if 0 <= userid_index < len(user_options):
@@ -957,7 +965,10 @@ class DataFetcher:
                     return True
 
             texts = [self._option_text(driver, o) for o in user_options]
-            logging.warning(f"切换用户 [{user_id}] 失败, 可选: {texts}")
+            logging.warning(
+                f"切换用户 [{user_id}] 失败, 当前户号={self._get_current_userid(driver) or '未知'}, "
+                f"期望选项={option_label or '未记录'}, 索引={userid_index}, 可选: {texts}"
+            )
         except Exception as e:
             logging.warning(f"切换用户 [{user_id}] 异常: {e}")
         return False
@@ -1462,6 +1473,7 @@ class DataFetcher:
                         if matches:
                             uid = matches[-1]
                             userid_list.append(uid)
+                            self._option_label_map[uid] = el_text
                             # 从文本中提取用户名（格式如 "户号:用户名" 或 "户号 用户名"）
                             name = el_text.replace(uid, "").strip().lstrip(":").strip()
                             if name and uid not in self._user_name_map:
@@ -1500,6 +1512,8 @@ class DataFetcher:
                             current_id = self._get_current_userid(driver)
                             if current_id and current_id not in userid_list:
                                 userid_list.append(current_id)
+                                if text:
+                                    self._option_label_map[current_id] = text
                                 if text and current_id not in self._user_name_map:
                                     self._user_name_map[current_id] = text
                                 logging.info(f"从 el-select 获取到用户: {current_id} ({text})")
