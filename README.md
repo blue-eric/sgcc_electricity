@@ -4,6 +4,82 @@
 
 自动登录国家电网（95598），抓取电费余额、日/月/年度用电量、分时电量、阶梯用电等数据，存入数据库并支持通过 Web 控制台查看。可选推送到 Home Assistant。
 
+---
+
+## 关于本仓库（blue-eric 改进版）
+
+> 本仓库 fork 自 [Poiig/sgcc_electricity](https://github.com/Poiig/sgcc_electricity)，遵循 Apache License 2.0。
+> 在原版基础上修复了一些实际运行中遇到的问题，并增加了几项可配置功能。**代码在 `my-custom` 分支**；
+> 通用的 bug 修复会以 PR 形式提交给原作者。下方「致谢」之后的内容为原作者文档。
+
+### 与原版的区别
+
+**问题修复**
+- 验证码确认后页面元素失效（stale），实际已登录成功却被误判为登录失败
+- 切换户号时下拉框偶尔为空导致该户号被跳过：自动刷新页面重试，失败时保存截图
+- 配置 `USER_NAMES` 后切换户号可能匹配不到选项
+- 月度/年度的总用电量、总电费被页面未加载完成时抓到的 0 覆盖
+- 年度/月度页面加载慢时获取数据失败
+
+**新增配置项**（均在 `example.env` 中有说明，不配置时保持原版行为）
+
+| 配置项 | 作用 |
+|---|---|
+| `USER_NAMES` | 户号显示名映射，例如 `户号1:我家住宅,户号2:充电桩` |
+| `WEWORK_MSG_FORMAT` | 企业微信消息格式：`text` / `markdown`（默认）/ `markdown_v2` |
+| `WEWORK_PUSH_SUMMARY` | 同步成功后是否推送数据汇总；同步失败通知、登录二维码不受影响 |
+| `JOB_TIMES_PER_DAY` | 每天定时同步次数：`1` 或 `2`（默认） |
+| `HA_REPUBLISH_INTERVAL_MINUTES` | 向 Home Assistant 重发数据的间隔（分钟） |
+| `LLM_TIMEOUT` / `LLM_MAX_RETRIES` / `LLM_MAX_TOKENS` | 大模型识别验证码的超时、重试次数、最大输出长度；兼容只接受 `max_completion_tokens` 的模型 |
+
+更换大模型厂商的方法见 [docs/LLM_CAPTCHA.md](docs/LLM_CAPTCHA.md)。
+
+### 部署（Docker）
+
+使用原作者发布的镜像，把本仓库的 `scripts` 目录挂载进容器覆盖镜像自带的代码，因此**需要先把本仓库下载到本地**：
+
+```bash
+git clone -b my-custom https://github.com/blue-eric/sgcc_electricity.git
+cd sgcc_electricity
+cp example.env .env          # 按注释填写账号、数据库、验证码、推送等配置
+docker compose -f docker-compose.fork.yml up -d
+```
+
+没有安装 git 时，也可以在 GitHub 页面切换到 `my-custom` 分支，点 **Code → Download ZIP** 下载后解压。
+
+**群晖 Container Manager**：把仓库放到例如 `/volume1/docker/sgcc_electricity`，在「项目 → 新增」中选择该目录，
+YAML 选择（或粘贴）`docker-compose.fork.yml` 的内容即可。
+
+需要持久化的三个挂载（已写在 `docker-compose.fork.yml` 中）：
+
+| 本地 | 容器内 | 内容 |
+|---|---|---|
+| `./data` | `/data` | 数据库（SQLite 时）、错误截图、日志等 |
+| `./.env` | `/data/.env` | 配置文件 |
+| `./scripts` | `/app/scripts` | 本仓库代码 |
+
+> 已经在用原版的，只需在原来的 `docker-compose.yml` 的 `volumes` 中增加一行
+> `- /本仓库路径/scripts:/app/scripts`，再把 `.env` 按 `example.env` 补充新配置项即可，数据库不用动。
+
+### 更新
+
+```bash
+cd sgcc_electricity
+git pull
+docker compose -f docker-compose.fork.yml restart
+```
+
+- 只改了代码时 `restart` 即可；**修改了 `.env` 后要重建容器**：`docker compose -f docker-compose.fork.yml up -d --force-recreate`
+- 原作者的镜像更新后可以执行 `docker compose -f docker-compose.fork.yml pull` 拉取。本仓库代码基于原作者 2026-07-19 的版本，
+  如果原作者镜像有较大改动导致启动报错，可以在 Issues 中反馈
+
+### 使用提示
+
+- `DAILY_FETCH_DAYS` 请保持 `30`：国网页面「近 7 天」只有每日总用电量，没有峰谷平尖分时
+- Web 控制台修改 `.env` 后，Docker 中需要重建容器才会生效
+
+---
+
 ## 致谢
 
 - [ARC-MX/sgcc_electricity_new](https://github.com/ARC-MX/sgcc_electricity_new) — 项目基础框架和数据抓取逻辑
