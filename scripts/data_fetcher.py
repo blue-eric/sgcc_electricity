@@ -661,9 +661,14 @@ class DataFetcher:
 
         return False
         
-    def fetch(self):
+    def fetch(self) -> dict:
 
-        """main logic here"""
+        """main logic here
+
+        Returns:
+            本轮结果，供 fetch_runner 判断成功 / 部分成功 / 失败：
+            {"login": 是否登录成功, "error": 失败原因, "ok": [成功的户号], "failed": [失败的户号], "skipped": [跳过的户号]}
+        """
 
         driver = self._get_webdriver()
         ErrorWatcher.instance().set_driver(driver)
@@ -710,7 +715,7 @@ class DataFetcher:
             logging.error(
                 f"浏览器异常退出: {e}，剩余重试次数 {self.RETRY_TIMES_LIMIT}")
             driver.quit()
-            return
+            return {"login": False, "error": f"登录失败: {e}", "ok": [], "failed": [], "skipped": []}
 
         logging.info(f"登录成功! 当前页面: {driver.current_url}")
         time.sleep(self._step_wait)
@@ -722,17 +727,19 @@ class DataFetcher:
         if not user_id_list:
             logging.error("获取用户 ID 列表失败")
             driver.quit()
-            return
+            return {"login": True, "error": "获取用户 ID 列表失败", "ok": [], "failed": [], "skipped": []}
         logging.info(f"共获取到 {len(user_id_list)} 个用户: {user_id_list}, 其中 {self.IGNORE_USER_ID} 将被忽略")
         time.sleep(self._step_wait)
 
         fetch_results = []
+        failed_users, skipped_users = [], []
 
         for userid_index, user_id in enumerate(user_id_list):           
             logging.info(f"===== 开始处理第 {userid_index + 1}/{len(user_id_list)} 个用户: {user_id} =====")
             try:
                 if user_id in self.IGNORE_USER_ID:
                     logging.info(f"用户 {user_id} 在忽略列表中, 跳过")
+                    skipped_users.append(user_id)
                     continue
 
                 driver.get(BALANCE_URL)
@@ -740,6 +747,7 @@ class DataFetcher:
                 logging.info(f"正在 userAcc 页面切换到用户 [{user_id}]...")
                 if not self._switch_to_user(driver, user_id, userid_index):
                     logging.warning(f"用户 [{user_id}] 在余额页切换失败, 跳过")
+                    failed_users.append(user_id)
                     continue
 
                 current_userid = self._get_current_userid(driver)
@@ -747,6 +755,7 @@ class DataFetcher:
                     logging.warning(
                         f"余额页户号仍为 {current_userid}, 期望 {user_id}, 跳过该用户"
                     )
+                    failed_users.append(user_id)
                     continue
                 logging.info(f"当前用户: {current_userid or user_id}, 开始获取用电数据...")
                 balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, tou_data, enhanced_balance, step_data, last_month_period = self._get_all_data(driver, user_id, userid_index)
@@ -781,6 +790,7 @@ class DataFetcher:
                 else:
                     logging.info(f"用户 {user_id} 数据获取失败: {e}")
                     logging.info("数据获取完成后关闭浏览器")
+                failed_users.append(user_id)
                 continue
 
         logging.info("所有用户数据处理完成, 关闭浏览器")
@@ -790,6 +800,8 @@ class DataFetcher:
         except Exception as exc:
             logging.warning("数据汇总推送失败 (非致命): %s", exc)
         driver.quit()
+        return {"login": True, "error": "", "ok": [r["user_id"] for r in fetch_results],
+                "failed": failed_users, "skipped": skipped_users}
 
 
     def _get_current_userid(self, driver) -> str:
