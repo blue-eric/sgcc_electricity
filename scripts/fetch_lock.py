@@ -47,6 +47,9 @@ def read_fetch_state() -> dict:
                 data["message"] = "上次任务已无响应（锁文件超过 10 分钟没有心跳），已自动重置"
                 write_fetch_state(data)
                 _release_lock_file()
+            else:
+                # 最近一次心跳（锁文件刷新时间）：外部调用方据此判断同步是否还活着，不写入状态文件
+                data["heartbeat_at"] = os.path.getmtime(lock_path)
         return data
     except Exception:
         return {"status": "idle", "message": "", "started_at": None, "finished_at": None}
@@ -76,6 +79,7 @@ def update_fetch_progress(message: str, **extra) -> None:
     """同步进行中更新提示（如"第 2/2 轮"），供 Web 控制台和外部调用方查看"""
     state = read_fetch_state()
     if state.get("status") == "running":
+        state.pop("heartbeat_at", None)
         state.update(message=message, **extra)
         write_fetch_state(state)
 
