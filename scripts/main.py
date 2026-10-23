@@ -95,18 +95,22 @@ def main():
 
     register_env_reload(lambda: fetcher.reload_from_env())
 
-    # 生成随机延迟时间（-10分钟到+10分钟）
-    random_delay_minutes = random.randint(-10, 10)
-    parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
-    logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
-
-    schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
-    if JOB_TIMES_PER_DAY == 2:
-        next_run_time = parsed_time + timedelta(hours=12)
-        schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
-        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+    if JOB_START_TIME.strip().lower() in ("off", "false", "none", "0"):
+        # 由外部程序（如 energy）通过 Web 控制台接口 /api/fetch 按需触发，不注册内部定时任务
+        logging.info("JOB_START_TIME=off：不注册定时同步，由外部调用 /api/fetch 或在 Web 控制台手动同步")
     else:
-        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
+        # 生成随机延迟时间（-10分钟到+10分钟）
+        random_delay_minutes = random.randint(-10, 10)
+        parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
+        logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
+
+        schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
+        if JOB_TIMES_PER_DAY == 2:
+            next_run_time = parsed_time + timedelta(hours=12)
+            schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
+            logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+        else:
+            logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     
     # 定时重发缓存数据，防止HA重启后数据丢失（不会登录国网）
     if updator:
@@ -133,25 +137,16 @@ def main():
 
 
 def run_task(data_fetcher: DataFetcher):
-    from fetch_lock import fetch_lock, mark_fetch_finished
+    # 整轮重试次数见 FETCH_RUN_ATTEMPTS（默认 2），每轮内的登录重试见 RETRY_TIMES_LIMIT
+    from fetch_runner import run_fetch
 
-    with fetch_lock(source="schedule", block=False) as acquired:
-        if not acquired:
-            logging.warning("跳过定时同步：已有抓取任务正在运行")
-            return
-        for retry_times in range(1, RETRY_TIMES_LIMIT + 1):
-            try:
-                data_fetcher.fetch()
-                mark_fetch_finished(True, "定时同步完成")
-                return
-            except Exception as e:
-                logging.error(f"数据同步任务失败: [{e}]，剩余重试次数 {RETRY_TIMES_LIMIT - retry_times}")
-                continue
-        mark_fetch_finished(False, "定时同步重试次数已用尽")
+    result = run_fetch(data_fetcher, source="schedule")
+    if result == "failed":
         # 重试耗尽后发送失败通知
         try:
             from notify import push_fetch_failed
-            push_fetch_failed(RETRY_TIMES_LIMIT)
+            from fetch_runner import run_attempts_default
+            push_fetch_failed(run_attempts_default())
         except Exception as notify_exc:
             logging.warning("发送失败通知时出错: %s", notify_exc)
 
