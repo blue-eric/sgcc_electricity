@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 原作者仓库 Poiig/sgcc_electricity
+    url: https://github.com/Poiig/sgcc_electricity/issues
+    about: 原版本身的问题、与本改进版无关的问题，请到原作者仓库反馈

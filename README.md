@@ -9,7 +9,7 @@
 ## 关于本仓库（blue-eric 改进版）
 
 > 本仓库 fork 自 [Poiig/sgcc_electricity](https://github.com/Poiig/sgcc_electricity)，遵循 Apache License 2.0。
-> 在原版基础上修复了一些实际运行中遇到的问题，并增加了几项可配置功能。**代码在 `my-custom` 分支**；
+> 在原版基础上修复了一些实际运行中遇到的问题，并增加了几项可配置功能。**代码在 `my-custom` 分支**，提供独立镜像；
 > 通用的 bug 修复会以 PR 形式提交给原作者。下方「致谢」之后的内容为原作者文档。
 
 ### 与原版的区别
@@ -36,47 +36,81 @@
 
 ### 部署（Docker）
 
-使用原作者发布的镜像，把本仓库的 `scripts` 目录挂载进容器覆盖镜像自带的代码，因此**需要先把本仓库下载到本地**：
+本仓库提供两种部署方式，**推荐方式一**。
+
+#### 方式一：使用本仓库镜像（推荐）
+
+镜像由 GitHub Actions 根据 `my-custom` 分支自动构建，x86 / ARM 通用：
+
+| 标签 | 说明 |
+|---|---|
+| `ghcr.io/blue-eric/sgcc_electricity:latest` | 最新版 |
+| `ghcr.io/blue-eric/sgcc_electricity:2.1.1-be.1` 等 | 正式版本（见 [Releases](https://github.com/blue-eric/sgcc_electricity/releases)） |
+| `ghcr.io/blue-eric/sgcc_electricity:20261024-1530` 等 | 每次构建的日期版本，出问题时可回退 |
+
+只需要 `docker-compose.fork.yml` 和 `.env` 两个文件：
+
+```bash
+mkdir sgcc_electricity && cd sgcc_electricity
+curl -o docker-compose.yml https://raw.githubusercontent.com/blue-eric/sgcc_electricity/my-custom/docker-compose.fork.yml
+curl -o .env https://raw.githubusercontent.com/blue-eric/sgcc_electricity/my-custom/example.env
+# 按注释编辑 .env 后启动
+docker compose up -d
+```
+
+**群晖 Container Manager**：新建文件夹放入上面两个文件，在「项目 → 新增」中选择该文件夹即可。
+
+更新：`docker compose pull && docker compose up -d`
+
+#### 方式二：原作者镜像 + 挂载本仓库代码
+
+不想用本仓库镜像时，可以继续使用原作者镜像，把本仓库的 `scripts` 目录挂载进容器覆盖自带代码：
 
 ```bash
 git clone -b my-custom https://github.com/blue-eric/sgcc_electricity.git
 cd sgcc_electricity
-cp example.env .env          # 按注释填写账号、数据库、验证码、推送等配置
-docker compose -f docker-compose.fork.yml up -d
+cp example.env .env
 ```
 
-没有安装 git 时，也可以在 GitHub 页面切换到 `my-custom` 分支，点 **Code → Download ZIP** 下载后解压。
+编辑 `docker-compose.fork.yml`：把 `image` 换成原作者镜像 `ghcr.io/poiig/sgcc_electricity:latest`，
+并取消 `./scripts:/app/scripts` 这一行的注释，然后 `docker compose -f docker-compose.fork.yml up -d`。
+更新时 `git pull` 后重启容器即可。
 
-**群晖 Container Manager**：把仓库放到例如 `/volume1/docker/sgcc_electricity`，在「项目 → 新增」中选择该目录，
-YAML 选择（或粘贴）`docker-compose.fork.yml` 的内容即可。
+> 已经在用原版的，只需在原来的 `docker-compose.yml` 的 `volumes` 中增加一行
+> `- /本仓库路径/scripts:/app/scripts`，再把 `.env` 按 `example.env` 补充新配置项即可，数据库不用动。
+> 注意：原作者镜像更新后可能与本仓库代码不匹配，方式一没有这个问题。
 
-需要持久化的三个挂载（已写在 `docker-compose.fork.yml` 中）：
+#### 持久化
 
 | 本地 | 容器内 | 内容 |
 |---|---|---|
 | `./data` | `/data` | 数据库（SQLite 时）、错误截图、日志等 |
 | `./.env` | `/data/.env` | 配置文件 |
-| `./scripts` | `/app/scripts` | 本仓库代码 |
+| `./scripts` | `/app/scripts` | 仅方式二需要 |
 
-> 已经在用原版的，只需在原来的 `docker-compose.yml` 的 `volumes` 中增加一行
-> `- /本仓库路径/scripts:/app/scripts`，再把 `.env` 按 `example.env` 补充新配置项即可，数据库不用动。
+修改 `.env` 后要**重建容器**才会生效：`docker compose up -d --force-recreate`
 
-### 更新
+### 已提交给原作者的修复
 
-```bash
-cd sgcc_electricity
-git pull
-docker compose -f docker-compose.fork.yml restart
-```
+以下修复已（或将）以独立 PR 提交给原作者，合并后会在此标注：
 
-- 只改了代码时 `restart` 即可；**修改了 `.env` 后要重建容器**：`docker compose -f docker-compose.fork.yml up -d --force-recreate`
-- 原作者的镜像更新后可以执行 `docker compose -f docker-compose.fork.yml pull` 拉取。本仓库代码基于原作者 2026-07-19 的版本，
-  如果原作者镜像有较大改动导致启动报错，可以在 Issues 中反馈
+| 修复 | 分支 | 状态 |
+|---|---|---|
+| 验证码确认后元素失效被误判为登录失败 | `fix/captcha-stale-element` | 待合并 |
+| 切换户号时下拉框为空，刷新页面后重试 | `fix/switch-user-empty-dropdown` | 待合并 |
+| 月度/年度总用量与总金额防止被 0 值覆盖 | `fix/db-zero-overwrite` | 待合并 |
+| 年度/月度用电等待改用 `visibility_of_element_located` | `fix/yearly-monthly-wait` | 待合并 |
+
+### 问题反馈
+
+本仓库为个人业余维护，尽力而为。请在 [Issues](https://github.com/blue-eric/sgcc_electricity/issues) 按模板反馈，并隐藏账号、户号等敏感信息；
+原版本身的问题请到 [Poiig/sgcc_electricity](https://github.com/Poiig/sgcc_electricity/issues) 反馈。
 
 ### 使用提示
 
 - `DAILY_FETCH_DAYS` 请保持 `30`：国网页面「近 7 天」只有每日总用电量，没有峰谷平尖分时
 - Web 控制台修改 `.env` 后，Docker 中需要重建容器才会生效
+- 版本号规则：`2.1.1-be.N` 表示基于原作者 2.1.1 的第 N 个改进版
 
 ---
 

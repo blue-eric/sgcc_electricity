@@ -1,0 +1,38 @@
+# blue-eric 改进版：每次推送 / PR 时做基础检查，避免改出语法错误
+#   - Python 3.11 / 3.12 编译 scripts/ 下全部文件（镜像为 3.11，3.11 不支持 f-string 内反斜杠等新语法）
+#   - ruff 检查语法错误、未定义变量等严重问题（不检查代码风格）
+name: Fork - 基础检查
+
+on:
+  push:
+    branches:
+      - my-custom
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/fork-check.yml'
+  pull_request:
+    paths:
+      - 'scripts/**'
+  workflow_dispatch:
+
+jobs:
+  check:
+    if: github.repository == 'blue-eric/sgcc_electricity'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 编译检查
+        run: python -m compileall -q scripts
+
+      - name: ruff 严重错误检查
+        run: |
+          pip install --quiet ruff
+          ruff check --select E9,F63,F7,F82 --target-version py311 scripts

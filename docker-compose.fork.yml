@@ -1,18 +1,18 @@
 # blue-eric/sgcc_electricity（改进版）部署文件
 #
-# 使用原作者 Poiig 发布的镜像，把本仓库的 scripts 目录挂载进容器，覆盖镜像自带的代码。
-# 用法：在本仓库根目录执行
-#   cp example.env .env        # 按注释填写
+# 方式一（推荐）：直接使用本仓库镜像，只需要本文件和 .env
 #   docker compose -f docker-compose.fork.yml up -d
-# 更新：git pull 后执行 docker compose -f docker-compose.fork.yml restart
+#   更新：docker compose -f docker-compose.fork.yml pull && docker compose -f docker-compose.fork.yml up -d
+#
+# 方式二：使用原作者镜像 + 挂载本仓库 scripts 目录（需要先 git clone 本仓库 my-custom 分支）
+#   把 image 换成原作者镜像，并取消下方 ./scripts:/app/scripts 一行的注释
 services:
   sgcc_electricity_app:
-    # GHCR 镜像（推荐）
-    image: ghcr.io/poiig/sgcc_electricity:latest
-    # GHCR 南京大学镜像加速（国内推荐）
-    # image: ghcr.nju.edu.cn/poiig/sgcc_electricity:latest
-    # Docker Hub 镜像加速
-    # image: docker.1ms.run/poiigzhao/sgcc_electricity:latest
+    # 方式一：本仓库镜像（x86 / ARM 通用）
+    image: ghcr.io/blue-eric/sgcc_electricity:latest
+    # 方式二：原作者镜像
+    # image: ghcr.io/poiig/sgcc_electricity:latest
+    # image: ghcr.nju.edu.cn/poiig/sgcc_electricity:latest   # 原作者镜像国内加速
     container_name: sgcc_electricity
     env_file:
       - .env
@@ -29,5 +29,5 @@ services:
     volumes:
       - ./data:/data              # 数据库、截图、日志等运行数据
       - ./.env:/data/.env         # 配置文件
-      - ./scripts:/app/scripts    # 本仓库代码（覆盖镜像自带的代码）
+      # - ./scripts:/app/scripts  # 仅方式二：本仓库代码（覆盖镜像自带的代码）
     init: true
