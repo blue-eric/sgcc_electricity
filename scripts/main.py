@@ -144,16 +144,25 @@ def main():
 
 
 def run_task(data_fetcher: DataFetcher):
-    # 整轮重试次数见 FETCH_RUN_ATTEMPTS（默认 2），每轮内的登录重试见 RETRY_TIMES_LIMIT
-    from fetch_runner import run_fetch
+    from fetch_lock import fetch_lock, mark_fetch_finished
 
-    result = run_fetch(data_fetcher, source="schedule")
-    if result == "failed":
+    with fetch_lock(source="schedule", block=False) as acquired:
+        if not acquired:
+            logging.warning("跳过定时同步：已有抓取任务正在运行")
+            return
+        for retry_times in range(1, RETRY_TIMES_LIMIT + 1):
+            try:
+                data_fetcher.fetch()
+                mark_fetch_finished(True, "定时同步完成")
+                return
+            except Exception as e:
+                logging.error(f"数据同步任务失败: [{e}]，剩余重试次数 {RETRY_TIMES_LIMIT - retry_times}")
+                continue
+        mark_fetch_finished(False, "定时同步重试次数已用尽")
         # 重试耗尽后发送失败通知
         try:
             from notify import push_fetch_failed
-            from fetch_runner import run_attempts_default
-            push_fetch_failed(run_attempts_default())
+            push_fetch_failed(RETRY_TIMES_LIMIT)
         except Exception as notify_exc:
             logging.warning("发送失败通知时出错: %s", notify_exc)
 

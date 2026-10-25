@@ -1,4 +1,5 @@
-"""一次完整的同步（含整轮重试），定时任务、Web 控制台手动同步和外部触发（如 energy）共用。
+"""一次完整的同步（含整轮重试），Web 控制台手动同步（1 轮）和外部触发（如 energy，按 /api/fetch 的 attempts）使用。
+定时同步仍用 main.run_task 原有逻辑，不经过本模块。
 
 整轮重试与登录重试是两层：
   - 登录重试：DataFetcher 内部，每轮最多 RETRY_TIMES_LIMIT 次点击登录
@@ -13,13 +14,6 @@ import time
 from typing import Optional, Tuple
 
 from fetch_lock import fetch_lock, mark_fetch_finished, update_fetch_progress
-
-
-def run_attempts_default() -> int:
-    try:
-        return max(1, int(os.getenv("FETCH_RUN_ATTEMPTS", "2")))
-    except ValueError:
-        return 2
 
 
 def retry_wait_seconds() -> int:
@@ -45,12 +39,12 @@ def classify(summary: Optional[dict]) -> Tuple[str, str]:
     return "failed", f"所有户号都获取失败（{', '.join(failed)}）" if failed else "没有可同步的户号"
 
 
-def run_fetch(fetcher, source: str, attempts: Optional[int] = None) -> Optional[str]:
+def run_fetch(fetcher, source: str, attempts: int = 1) -> Optional[str]:
     """
     在同步锁内执行，最多 attempts 轮。返回最终结果 success / partial / failed；
     已有同步在运行（拿不到锁）时返回 None，不做任何事。
     """
-    attempts = attempts or run_attempts_default()
+    attempts = max(1, attempts)
     with fetch_lock(source=source, block=False) as acquired:
         if not acquired:
             logging.warning("跳过同步（来源 %s）：已有同步任务正在运行", source)
