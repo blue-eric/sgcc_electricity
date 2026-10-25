@@ -95,18 +95,23 @@ def main():
 
     register_env_reload(lambda: fetcher.reload_from_env())
 
-    # 生成随机延迟时间（-10分钟到+10分钟）
-    random_delay_minutes = random.randint(-10, 10)
-    parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
-    logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
-
-    schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
-    if JOB_TIMES_PER_DAY == 2:
-        next_run_time = parsed_time + timedelta(hours=12)
-        schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
-        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+    external_trigger = JOB_START_TIME.strip().lower() in ("off", "false", "none", "0")
+    if external_trigger:
+        # 由外部程序（如 energy）通过 Web 控制台接口 /api/fetch 按需触发，不注册内部定时任务
+        logging.info("JOB_START_TIME=off：不注册定时同步，由外部调用 /api/fetch 或在 Web 控制台手动同步")
     else:
-        logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
+        # 生成随机延迟时间（-10分钟到+10分钟）
+        random_delay_minutes = random.randint(-10, 10)
+        parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
+        logging.info(f"登录账号: {PHONE_NUMBER}，每天 {parsed_time.strftime('%H:%M')} 定时同步")
+
+        schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
+        if JOB_TIMES_PER_DAY == 2:
+            next_run_time = parsed_time + timedelta(hours=12)
+            schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
+            logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 和 {next_run_time.strftime('%H:%M')} 各执行一次")
+        else:
+            logging.info(f"定时任务已注册，每天 {parsed_time.strftime('%H:%M')} 执行一次")
     
     # 定时重发缓存数据，防止HA重启后数据丢失（不会登录国网）
     if updator:
@@ -114,9 +119,15 @@ def main():
         logging.info(f"HA 数据重发间隔: {HA_REPUBLISH_INTERVAL_MINUTES} 分钟")
     
     # 启动时抓取策略：
+    # JOB_START_TIME=off   → 何时登录国网完全由外部决定：启动时不抓取（RUN_ON_STARTUP 也不生效），只恢复 HA 缓存
     # RUN_ON_STARTUP=true  → 立即登录抓取（Docker 调试/首次部署推荐）
     # 否则先尝试缓存恢复，无缓存才抓取（有缓存则等到定时任务，避免频繁重启封号）
-    if RUN_ON_STARTUP:
+    if external_trigger:
+        if updator:
+            updator.republish()
+        logging.info("JOB_START_TIME=off：启动时不登录国网，等待外部触发或在 Web 控制台手动同步"
+                     + ("（RUN_ON_STARTUP=true 在此模式下不生效）" if RUN_ON_STARTUP else ""))
+    elif RUN_ON_STARTUP:
         logging.info("RUN_ON_STARTUP 已启用，启动后立即执行登录与数据抓取...")
         run_task(fetcher)
     elif updator and not updator.republish():

@@ -1,4 +1,8 @@
-"""本地单次抓取测试（不进入定时循环）"""
+"""单次同步（不进入定时循环）：Web 控制台手动同步、外部触发和本地测试使用
+
+    python run_fetch_once.py [--source manual|energy|...] [--attempts 轮数]
+"""
+import argparse
 import os
 import sys
 import logging
@@ -33,24 +37,23 @@ except Exception:
     pass
 
 from data_fetcher import DataFetcher
-from fetch_lock import fetch_lock, mark_fetch_finished
+from fetch_runner import run_fetch
+
+parser = argparse.ArgumentParser(description="单次同步国家电网数据")
+parser.add_argument("--source", default="manual", help="来源，写入同步状态（manual / energy 等）")
+parser.add_argument("--attempts", type=int, default=1, help="整轮最多尝试几轮（默认 1）")
+args = parser.parse_args()
 
 phone = os.getenv("PHONE_NUMBER")
 password = os.getenv("PASSWORD")
 logging.info(
-    "开始本地测试抓取, 登录方式=%s, DB=%s",
-    os.getenv("LOGIN_METHOD"),
-    os.getenv("DB_TYPE"),
+    "开始单次同步, 来源=%s, 最多 %d 轮, 登录方式=%s, DB=%s",
+    args.source, args.attempts, os.getenv("LOGIN_METHOD"), os.getenv("DB_TYPE"),
 )
 fetcher = DataFetcher(phone, password)
-with fetch_lock(source="manual", block=False) as acquired:
-    if not acquired:
-        logging.error("已有同步任务正在运行，请稍后再试")
-        sys.exit(2)
-    try:
-        fetcher.fetch()
-        mark_fetch_finished(True, "手动同步完成")
-    except Exception as exc:
-        mark_fetch_finished(False, str(exc))
-        raise
-logging.info("本地测试抓取完成")
+result = run_fetch(fetcher, source=args.source, attempts=max(1, args.attempts))
+if result is None:
+    logging.error("已有同步任务正在运行，请稍后再试")
+    sys.exit(2)
+logging.info("单次同步结束: %s", result)
+sys.exit(0 if result != "failed" else 1)

@@ -100,7 +100,8 @@ def _last_fetch_timestamp() -> Optional[float]:
                 pass
     if is_db_enabled():
         ts = latest_balance_log_timestamp()
-        if ts is not None:
+        # 数据库时间不带时区，容器与数据库时区不一致时可能算出"未来"的时间，导致冷却时间长达数小时；这种情况忽略
+        if ts is not None and ts <= time.time() + 60:
             return ts
     return None
 
@@ -114,11 +115,11 @@ def _format_ts(ts: Optional[float]) -> Optional[str]:
         return None
 
 
-def _run_fetch_subprocess() -> None:
+def _run_fetch_subprocess(source: str = "manual", attempts: int = 1) -> None:
     scripts_dir = Path(__file__).resolve().parent
     try:
         subprocess.run(
-            [sys.executable, "run_fetch_once.py"],
+            [sys.executable, "run_fetch_once.py", "--source", source, "--attempts", str(attempts)],
             cwd=str(scripts_dir),
             env=os.environ.copy(),
         )
@@ -227,7 +228,15 @@ def _register_routes(router: APIRouter) -> None:
         return {"user_id": user_id, "months": months, "data": get_monthly_chart(user_id, months), "db_enabled": True}
 
     @router.post("/api/fetch", dependencies=[Depends(require_auth)])
-    def api_fetch():
+    def api_fetch(
+        source: str = Query("manual", pattern=r"^[A-Za-z0-9_-]{1,32}$"),
+        attempts: int = Query(1, ge=1, le=5),
+    ):
+        """
+        启动一次同步（后台运行，立即返回）。外部程序（如 energy）可传 source=energy、attempts=2，
+        之后轮询 /api/status 的 fetch 字段：status 回到 idle 且 started_at 不早于触发时间即为结束，
+        result 为 success / partial / failed。冷却时间对所有来源都生效，防止频繁登录被风控。
+        """
         global _fetch_thread
         if is_fetch_running():
             raise HTTPException(status_code=409, detail="已有同步任务正在运行")
@@ -241,9 +250,10 @@ def _register_routes(router: APIRouter) -> None:
                 )
         if _fetch_thread and _fetch_thread.is_alive():
             raise HTTPException(status_code=409, detail="同步任务已启动")
-        _fetch_thread = threading.Thread(target=_run_fetch_subprocess, daemon=True)
+        _fetch_thread = threading.Thread(target=_run_fetch_subprocess, args=(source, attempts), daemon=True)
         _fetch_thread.start()
-        return JSONResponse({"ok": True, "message": "已启动手动同步，请查看运行日志"})
+        return JSONResponse({"ok": True, "message": "已启动手动同步，请查看运行日志",
+                             "requested_at": time.time()})
 
     @router.get("/api/env", dependencies=[Depends(require_auth)])
     def api_env_get():
