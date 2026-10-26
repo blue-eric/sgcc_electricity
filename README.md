@@ -20,6 +20,9 @@
 - 配置 `USER_NAMES` 后切换户号可能匹配不到选项
 - 月度/年度的总用电量、总电费被页面未加载完成时抓到的 0 覆盖
 - 年度/月度页面加载慢时获取数据失败
+- 登录失败、取不到户号时被记为「同步成功」且不会重试
+- 户号多、同步超过 1 小时时，同步锁被误判为超时而重置
+- 容器与数据库时区不一致时，Web 控制台的同步冷却时间被算成数小时
 
 **新增配置项**（均在 `example.env` 中有说明，不配置时保持原版行为）
 
@@ -31,8 +34,27 @@
 | `JOB_TIMES_PER_DAY` | 每天定时同步次数：`1` 或 `2`（默认） |
 | `HA_REPUBLISH_INTERVAL_MINUTES` | 向 Home Assistant 重发数据的间隔（分钟） |
 | `LLM_TIMEOUT` / `LLM_MAX_RETRIES` / `LLM_MAX_TOKENS` | 大模型识别验证码的超时、重试次数、最大输出长度；兼容只接受 `max_completion_tokens` 的模型 |
+| `JOB_START_TIME=off` | 关闭内部定时同步，启动时也不登录国网，改由外部程序调用接口按需触发（见下方「外部触发同步」）；Web 控制台仍可手动同步 |
+| `FETCH_RUN_RETRY_WAIT_MINUTES` | 外部触发要求整轮重试时，两轮之间等待的分钟数（默认 10） |
 
 更换大模型厂商的方法见 [docs/LLM_CAPTCHA.md](docs/LLM_CAPTCHA.md)。
+
+### 外部触发同步
+
+适合由其他程序（如 [blue-eric/energy](https://github.com/blue-eric/energy) 能源日报）统一安排同步时间的场景：
+设置 `JOB_START_TIME=off` 并开启 Web 控制台（`WEB_DASHBOARD=true`）后，本程序不再自己定时登录国网，由外部程序通过 HTTP 接口触发。
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/fetch?source=energy&attempts=2` | 在后台启动一次同步并立即返回。`source`：调用方名称（字母、数字、`_`、`-`，默认 `manual`），记录在同步状态里；`attempts`：整轮重试次数（1~5，默认 1），登录失败、取不到户号或所有户号都失败时，等待 `FETCH_RUN_RETRY_WAIT_MINUTES` 分钟后整轮重来。已有同步在运行时返回 409，冷却时间内返回 429 |
+| `GET /api/status` | 查询同步状态。`fetch` 字段中：`status` 回到 `idle` 且 `started_at` 不早于触发时间即为本次结束；`result` 为 `success`（全部成功）/ `partial`（部分户号失败）/ `failed`（失败），`detail` 为明细；同步进行中时 `heartbeat_at` 为最近一次心跳时间，调用方据此判断同步是否仍在进行 |
+
+说明：
+- 冷却时间（`FETCH_COOLDOWN_MINUTES`，默认 30 分钟）对所有来源都生效，防止频繁登录被风控
+- 设置了 Web 控制台密码时，需先 `POST /api/login` 获取 token，之后的请求带上请求头 `X-Dashboard-Session: <token>`
+- 部分户号失败记为 `partial`，不会整轮重试，避免重复登录
+- 内部定时同步（`JOB_START_TIME` 为具体时间时）保持原有重试逻辑，不受 `attempts` 影响
+- 同步锁带心跳：户号多、同步时间长也不会被误判为超时；进程异常退出 10 分钟后自动释放
 
 ### 部署（Docker）
 
